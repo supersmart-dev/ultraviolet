@@ -65,6 +65,25 @@ func (c *Cell) IsZero() bool {
 	return *c == Cell{}
 }
 
+// isZeroFast is IsZero, telling a cell with content apart without comparing
+// the rest: drawing a line asks it of every cell.
+func (c *Cell) isZeroFast() bool {
+	return c.Content == "" && c.IsZero()
+}
+
+// isEmptyFast is Equal(&EmptyCell), telling a cell with other content
+// apart without comparing styles, and a plain blank without comparing
+// colors.
+func (c *Cell) isEmptyFast() bool {
+	if c.Content != " " || c.Width != 1 {
+		return false
+	}
+	if c.Style.IsZero() && c.Link.IsZero() {
+		return true
+	}
+	return c.Equal(&EmptyCell)
+}
+
 // isWidePlaceholder reports whether the cell is the continuation column of a
 // wide cell, marked with a zero display width.
 func (c *Cell) isWidePlaceholder() bool {
@@ -111,7 +130,7 @@ func (h *Link) Equal(o *Link) bool {
 
 // IsZero returns whether the hyperlink is empty.
 func (h *Link) IsZero() bool {
-	return *h == Link{}
+	return h.URL == "" && h.Params == ""
 }
 
 // These are the available text attributes that can be combined to create
@@ -420,6 +439,23 @@ func colorEqual(c, o color.Color) bool {
 	if c == nil || o == nil {
 		return false
 	}
+	// The kinds of color a terminal's styles hold, compared as values
+	// without the two dynamic RGBA calls; equal values have equal RGBA, and
+	// unequal ones are still compared by it below.
+	switch cv := c.(type) {
+	case color.RGBA:
+		if ov, ok := o.(color.RGBA); ok && cv == ov {
+			return true
+		}
+	case ansi.IndexedColor:
+		if ov, ok := o.(ansi.IndexedColor); ok && cv == ov {
+			return true
+		}
+	case ansi.BasicColor:
+		if ov, ok := o.(ansi.BasicColor); ok && cv == ov {
+			return true
+		}
+	}
 	cr, cg, cb, ca := c.RGBA()
 	or, og, ob, oa := o.RGBA()
 	return cr == or && cg == og && cb == ob && ca == oa
@@ -427,7 +463,11 @@ func colorEqual(c, o color.Color) bool {
 
 // IsZero returns true if the style is empty.
 func (s *Style) IsZero() bool {
-	return *s == Style{}
+	// Field by field rather than *s == Style{}: comparing the whole struct
+	// compares its colors as interfaces, which costs a call each, and
+	// drawing a line asks this of every cell.
+	return s.Fg == nil && s.Bg == nil && s.UnderlineColor == nil &&
+		s.Underline == 0 && s.Attrs == 0
 }
 
 // ConvertStyle converts a style to respect the given color profile.
