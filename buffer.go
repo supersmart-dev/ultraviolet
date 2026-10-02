@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -142,11 +143,12 @@ func renderLine(buf io.StringWriter, l Line) {
 	var link Link
 	var pending bytes.Buffer
 
-	for _, c := range l {
-		if c.IsZero() {
+	for i := range l {
+		c := &l[i]
+		if c.isZeroFast() {
 			continue
 		}
-		if c.Equal(&EmptyCell) {
+		if c.isEmptyFast() {
 			if !pen.IsZero() {
 				_, _ = buf.WriteString(ansi.ResetStyle)
 				pen = Style{}
@@ -471,6 +473,16 @@ func (b *Buffer) InsertLineArea(y, n int, c *Cell, area Rectangle) {
 		n = area.Max.Y - y
 	}
 
+	// When the area spans whole lines, move the lines themselves rather than
+	// their cells: the lines pushed out become the blank ones.
+	if b.wholeLines(area) {
+		rotateLines(b.Lines[y:area.Max.Y], area.Max.Y-y-n)
+		for i := y; i < y+n; i++ {
+			b.Lines[i].fill(c)
+		}
+		return
+	}
+
 	// Move existing lines down within the bounds
 	for i := area.Max.Y - 1; i >= y+n; i-- {
 		for x := area.Min.X; x < area.Max.X; x++ {
@@ -502,6 +514,16 @@ func (b *Buffer) DeleteLineArea(y, n int, c *Cell, area Rectangle) {
 		n = area.Max.Y - y
 	}
 
+	// When the area spans whole lines, move the lines themselves rather than
+	// their cells: the deleted lines become the blank ones at the bottom.
+	if b.wholeLines(area) {
+		rotateLines(b.Lines[y:area.Max.Y], n)
+		for i := area.Max.Y - n; i < area.Max.Y; i++ {
+			b.Lines[i].fill(c)
+		}
+		return
+	}
+
 	// Shift cells up within the bounds
 	for dst := y; dst < area.Max.Y-n; dst++ {
 		src := dst + n
@@ -516,6 +538,49 @@ func (b *Buffer) DeleteLineArea(y, n int, c *Cell, area Rectangle) {
 		for x := area.Min.X; x < area.Max.X; x++ {
 			b.SetCell(x, i, c)
 		}
+	}
+}
+
+// wholeLines reports whether area covers every cell of the lines it spans,
+// so that moving lines within it can move the lines rather than their cells.
+func (b *Buffer) wholeLines(area Rectangle) bool {
+	if area.Min.X != 0 || area.Min.Y < 0 || area.Max.Y > len(b.Lines) {
+		return false
+	}
+	for _, l := range b.Lines[area.Min.Y:area.Max.Y] {
+		if len(l) != area.Max.X {
+			return false
+		}
+	}
+	return true
+}
+
+// rotateLines rotates lines left by n in place, so that lines[n] becomes
+// lines[0] and the first n lines go to the end.
+func rotateLines(lines []Line, n int) {
+	if n <= 0 || n >= len(lines) {
+		return
+	}
+	slices.Reverse(lines[:n])
+	slices.Reverse(lines[n:])
+	slices.Reverse(lines)
+}
+
+// fill sets every cell of l to c, or to [EmptyCell] if c is nil, as setting
+// each in turn would.
+func (l Line) fill(c *Cell) {
+	if c != nil && c.Width > 1 {
+		for x := range l {
+			l.Set(x, c)
+		}
+		return
+	}
+	blank := EmptyCell
+	if c != nil {
+		blank = *c
+	}
+	for x := range l {
+		l[x] = blank
 	}
 }
 
